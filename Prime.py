@@ -14,27 +14,28 @@ import re
 import xml, xml.dom.minidom
 import cPickle as pickle # try import pickle if that doesn't work
 
-class PrimeSpeciesList:
-	def __init__(self,mirror="warehouse.primekinetics.org",cache="cache"):
-		self.mirrorLocation=mirror
-		self.cacheLocation=cache
-		self.cas2primeids=dict()
-		self.primeid2cas=dict()
-		
-		self.cacheItems=['cas2primeids','primeid2cas']
-		try: 
-			self.loadCache()
-		except:
-			print "couldn't load cache."
-			self.readCAS()
-			self.saveCache()
-		
+class ThingWithCache:
+	""" a parent class for things with caches. Classes inheriting from this can use various cache load/save functions"""
 	def loadCache(self):
-		for item in self.cacheItems:
-			self.loadItem(item)
+		try:
+			for item in self.cacheItems:
+				self.loadItem(item)
+		except:
+			print "couldn't load cache"
+			return False
+		return True
 	def saveCache(self):
-		for item in self.cacheItems:
-			self.saveItem(item)
+		try: # try to make the folder
+			os.makedirs(self.cacheLocation)
+		except OSError:
+			pass # folder exists
+		try:
+			for item in self.cacheItems:
+				self.saveItem(item)
+		except:
+			print "couldn't save cache"
+			return False
+		return True
 	def saveItem(self,itemName):
 		obj=getattr(self,itemName)
 		filePath=os.path.join(self.cacheLocation,itemName+'.pkl')
@@ -42,6 +43,21 @@ class PrimeSpeciesList:
 	def loadItem(self,itemName):
 		filePath=os.path.join(self.cacheLocation,itemName+'.pkl')
 		setattr(self,itemName,pickle.load(file(filePath, 'rb')))
+		
+class PrimeSpeciesList(ThingWithCache):
+	def __init__(self,mirror="warehouse.primekinetics.org",cache="cache"):
+		self.mirrorLocation=mirror
+		self.cacheLocation=cache
+		self.cas2primeids=dict()
+		self.primeid2cas=dict()
+	
+		self.cacheItems=['cas2primeids','primeid2cas']
+		try: 
+			self.loadCache()
+		except:
+			print "couldn't load cache."
+			self.readCAS()
+			self.saveCache()
 		
 	def readCAS(self):
 		path=os.path.join(self.mirrorLocation,'depository','species','catalog')
@@ -65,24 +81,50 @@ class PrimeSpeciesList:
 				else:
 					self.cas2primeids[cas]=[primeid]
 				
-class BurcatThermo:
+class BurcatThermo(ThingWithCache):
 	"""needs BURCAT_THR.xml file"""
-	def __init__(self,mirror="BURCAT_THR.xml"):
-		self.dom=xml.dom.minidom.parse('BURCAT_THR.xml')
+	def __init__(self,mirror="BURCAT_THR.xml", cache="cache"):
+		self.cacheLocation=cache
+		# can't cache the dom because pickle's maximum recursion depth exceeded
+		self.dom = self.readXML(mirror)
 
-
-
-	
-	for specie in burcat.getElementsByTagName('specie'):
-		cas=specie.attributes.getNamedItem('CAS').value
-		try:
-			primeids=p.cas2primeids[cas]
-		except KeyError:
-			print "species with CAS %s not in prime"%cas
-			continue
-		for phase in specie.getElementsByTagName('phase'):
-			phase
+	def readXML(self,mirror):
+		print "Reading in %s ..."%mirror
+		dom=xml.dom.minidom.parse(mirror)
+		print "Done!"
+		return dom
+		
+	def loadCache(self):
+		for item in self.cacheItems:
+			self.loadItem(item)
+	def saveCache(self):
+		for item in self.cacheItems:
+			self.saveItem(item)
 			
+	def species(self):
+		for specie in self.dom.getElementsByTagName('specie'):
+			yield BurcatSpecies(specie)
+			
+class BurcatSpecies:
+	def __init__(self,dom):
+		self.dom=dom
+		if self.dom.attributes.has_key('CAS'):
+			self.cas=self.dom.attributes.getNamedItem('CAS').value
+		else: self.cas="No_CAS_in_Burcat"
+	def phases(self):
+		for phase in self.dom.getElementsByTagName('phase'):
+			if len(phase.childNodes) > 1: # BURCAT_THR.xml has two types of <phase> node. One contains nested child nodes, the other just a text node "S|L|G". We only want the former.
+				yield BurcatPhase(phase)
+			else:
+				print "I think %s is not a real phase"%phase.toxml()
+			
+class BurcatPhase:
+	def __init__(self,dom):
+		self.dom=dom
+	def formula(self):
+		formulas= self.dom.getElementsByTagName('formula')
+		assert len(formulas)==1 ,"there should be only one formula"
+		return formulas[0]
 			
 class PrimeThermo:
 	def __init__(self,primeid,mirror="warehouse.primekinetics.org"):
@@ -100,9 +142,20 @@ class untitledTests(unittest.TestCase):
 	def setUp(self):
 		pass
 
-
 if __name__ == '__main__':
-	unittest.main()
-	
+#	unittest.main()	
 	p=PrimeSpeciesList()
 	
+	b=BurcatThermo()
+
+	for specie in b.species():
+		try:
+			primeids=p.cas2primeids[specie.cas]
+		except KeyError:
+			print "species with CAS %s not in prime"%specie.cas
+			continue			
+		for phase in specie.phases():
+			print phase.formula().firstChild.wholeText
+			
+	 b.dom.unlink() # memory explodes if you don't do this. 
+	#comment it out though if you want to play around with things after running the script
