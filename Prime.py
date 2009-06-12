@@ -3,6 +3,9 @@
 """
 Prime.py
 
+Reads in BURCAT_THR.xml and a PrIMe data warehouse, and compares the two.
+
+
 Created by Richard West on 2009-06-09.
 Copyright (c) 2009 MIT. All rights reserved.
 """
@@ -16,8 +19,12 @@ import cPickle as pickle # try import pickle if that doesn't work
 import numpy
 
 class ThingWithCache:
-	""" a parent class for things with caches. Classes inheriting from this can use various cache load/save functions"""
+	""" 
+	A parent class for things with caches. 
+	Classes inheriting from this can use various cache load/save functions.
+	This is done to speed up creation of items that take a long time to generate"""
 	def loadCache(self):
+		"""loads the cache (everything in the list self.cacheItems is attempted)"""
 		try:
 			for item in self.cacheItems:
 				self.loadItem(item)
@@ -26,41 +33,55 @@ class ThingWithCache:
 			return False
 		return True
 	def saveCache(self):
+		"""Saves the cache (everything in the list self.cacheItems gets saved)"""
 		try: # try to make the folder
 			os.makedirs(self.cacheLocation)
 		except OSError:
-			pass # folder exists
+			pass # folder probably exists already
 		try:
 			for item in self.cacheItems:
 				self.saveItem(item)
 		except:
-			print "couldn't save cache"
+			print "Couldn't save cache"
 			return False
 		return True
 	def saveItem(self,itemName):
+		"""save an item in the cache at self.cacheLocation"""
 		obj=getattr(self,itemName)
 		filePath=os.path.join(self.cacheLocation,itemName+'.pkl')
 		pickle.dump(obj, file(filePath, 'wb'))
 	def loadItem(self,itemName):
+		"""load an item from the cache in self.cacheLocation,
+		   and load it into self.<item>"""
 		filePath=os.path.join(self.cacheLocation,itemName+'.pkl')
 		setattr(self,itemName,pickle.load(file(filePath, 'rb')))
 		
-class PrimeSpeciesList(ThingWithCache):
+class PrimeSpeciesList(ThingWithCache): # inherit from the parent class ThingWithCache so that we can use the cache load/save functions 
+	"""
+	This is the class for the main list of Prime Species. 
+	All it is really used for is translating between CAS numbers and PrIMe species IDs. 
+	Instances of this class (you'll probably only have one such instance) have dictionaries to do this translation.
+	"""
 	def __init__(self,mirror="warehouse.primekinetics.org",cache="cache"):
 		self.mirrorLocation=mirror
 		self.cacheLocation=cache
 		self.cas2primeids=dict()
 		self.primeid2cas=dict()
 	
-		self.cacheItems=['cas2primeids','primeid2cas']
+		self.cacheItems=['cas2primeids','primeid2cas'] # these are the items we wish to save/load in the cache
 		try: 
-			self.loadCache()
+			self.loadCache() # try to load the cache
 		except:
-			print "couldn't load cache."
+			print "Couldn't load cache."
 			self.readCAS()
 			self.saveCache()
 		
 	def readCAS(self):
+		"""
+		Reads in the CAS number from every species file in the prime warehouse
+		populates the dictionaries self.cas2primeids (notice this is plural - it stores lists of prime ids) 
+		                       and self.primeid2cas 
+		"""
 		path=os.path.join(self.mirrorLocation,'depository','species','catalog')
 		listOfFiles=os.listdir(path)
 		reCas=re.compile('CASRegistryNumber">([0-9/-]+)</name>')
@@ -78,32 +99,34 @@ class PrimeSpeciesList(ThingWithCache):
 				# each cas may have more than one primeid so we store as a list and append
 				if self.cas2primeids.has_key(cas):
 					self.cas2primeids[cas].append(primeid)
-					print "Warning! species %s all have CAS %s"%(self.cas2primeids[cas], cas)
+					print "Warning! species %s all have same CAS %s"%(self.cas2primeids[cas], cas)
 				else:
 					self.cas2primeids[cas]=[primeid]
 				
 class BurcatThermo:
-	"""reads BURCAT_THR.xml file"""
+	"""a class for the Burcat Thermodynamics. 
+	When you create an instance of this class it reads the BURCAT_THR.xml file into memory, eg.
+	   b = BurcatThermo()   or if you prefer:  b=BurcatThermo(mirror='BURCAT_THR.xml') 
+	then you can get all the species in the file using
+	   for species in b.species():
+	"""
 	def __init__(self,mirror="BURCAT_THR.xml"):
-		# can't cache the dom because pickle's maximum recursion depth exceeded
+		# can't cache the dom because pickle's maximum recursion depth is exceeded by the dom.
 		self.dom = self.readXML(mirror)
 	def __del__(self):
+		"""please try to explicitly delete instances of this class, so that the dom is unlinked
+		otherwise you get massive amounts of wasted (leaked) memory."""
 		self.dom.unlink()
 
 	def readXML(self,mirror):
+		""" reads in the XML from the file"""
 		print "Reading in %s ..."%mirror
 		dom=xml.dom.minidom.parse(mirror)
 		print "Done!"
 		return dom
-		
-	def loadCache(self):
-		for item in self.cacheItems:
-			self.loadItem(item)
-	def saveCache(self):
-		for item in self.cacheItems:
-			self.saveItem(item)
 			
 	def species(self):
+		"""a generator function. returns (one at a time) each species in the Burcat thermo"""
 		for specie in self.dom.getElementsByTagName('specie'):
 			yield BurcatSpecies(specie)
 			
