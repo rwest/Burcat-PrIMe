@@ -1,0 +1,3 @@
+Reads in BURCAT_THR.xml and a PrIMe data warehouse, and compares the two.
+Uses a local mirror of the prime warehouse stored in the folder called ./warehouse.primekinetics.org/
+
