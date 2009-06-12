@@ -4,7 +4,7 @@
 Prime.py
 
 Reads in BURCAT_THR.xml and a PrIMe data warehouse, and compares the two.
-
+Uses a local mirror of the prime warehouse stored in the folder called ./warehouse.primekinetics.org/
 
 Created by Richard West on 2009-06-09.
 Copyright (c) 2009 MIT. All rights reserved.
@@ -17,6 +17,7 @@ import re
 import xml, xml.dom.minidom
 import cPickle as pickle # try import pickle if that doesn't work
 import numpy
+
 
 class ThingWithCache:
 	""" 
@@ -61,8 +62,14 @@ class PrimeSpeciesList(ThingWithCache): # inherit from the parent class ThingWit
 	This is the class for the main list of Prime Species. 
 	All it is really used for is translating between CAS numbers and PrIMe species IDs. 
 	Instances of this class (you'll probably only have one such instance) have dictionaries to do this translation.
+	If you update your prime mirror then you should delete the cache folder so you regenerate the dictionaries.
 	"""
 	def __init__(self,mirror="warehouse.primekinetics.org",cache="cache"):
+		""" 
+		  p=PrimeSpeciesList(mirror="warehouse.primekinetics.org",cache="cache") 
+		creates an instance using a local mirror of the prime warehouse stored in the 
+		local folder called ./warehouse.primekinetics.org/ (relative to the working folder)
+		and a cache stored in the folder ./cache/"""
 		self.mirrorLocation=mirror
 		self.cacheLocation=cache
 		self.cas2primeids=dict()
