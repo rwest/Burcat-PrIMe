@@ -13,6 +13,7 @@ import unittest
 import re
 import xml, xml.dom.minidom
 import cPickle as pickle # try import pickle if that doesn't work
+import numpy
 
 class ThingWithCache:
 	""" a parent class for things with caches. Classes inheriting from this can use various cache load/save functions"""
@@ -81,12 +82,13 @@ class PrimeSpeciesList(ThingWithCache):
 				else:
 					self.cas2primeids[cas]=[primeid]
 				
-class BurcatThermo(ThingWithCache):
-	"""needs BURCAT_THR.xml file"""
-	def __init__(self,mirror="BURCAT_THR.xml", cache="cache"):
-		self.cacheLocation=cache
+class BurcatThermo:
+	"""reads BURCAT_THR.xml file"""
+	def __init__(self,mirror="BURCAT_THR.xml"):
 		# can't cache the dom because pickle's maximum recursion depth exceeded
 		self.dom = self.readXML(mirror)
+	def __del__(self):
+		self.dom.unlink()
 
 	def readXML(self,mirror):
 		print "Reading in %s ..."%mirror
@@ -115,47 +117,193 @@ class BurcatSpecies:
 		for phase in self.dom.getElementsByTagName('phase'):
 			if len(phase.childNodes) > 1: # BURCAT_THR.xml has two types of <phase> node. One contains nested child nodes, the other just a text node "S|L|G". We only want the former.
 				yield BurcatPhase(phase)
-			else:
-				print "I think %s is not a real phase"%phase.toxml()
+			#else: print "I think %s is not a real phase"%phase.toxml()
 			
 class BurcatPhase:
 	def __init__(self,dom):
 		self.dom=dom
+	def __str__(self):
+		return "%s (%s)"%(self.formula(),self.phaseOfMatter())
 	def formula(self):
 		formulas= self.dom.getElementsByTagName('formula')
-		assert len(formulas)==1 ,"there should be only one formula"
-		return formulas[0]
+		assert len(formulas)==1 ,"there should be only one formula in this phase"
+		return formulas[0].firstChild.wholeText
+	def phaseOfMatter(self):
+		phases= self.dom.getElementsByTagName('phase')
+		assert len(phases)==1 ,"there should be only one phase in this phase"
+		return phases[0].firstChild.wholeText
+	def coefficients(self):
+		""" returns numpy.array([lowTcoeffs, highTcoeffs])  of the thermo polynomial coefficients"""
+		coefficientsets=self.dom.getElementsByTagName('coefficients')
+		assert len(coefficientsets)==1, "there should only be one set of coefficients"
+		coeffs=coefficientsets[0]
+		highTcoeffNodes=coeffs.getElementsByTagName('range_1000_to_Tmax')[0].getElementsByTagName('coef')
+		lowTcoeffNodes=coeffs.getElementsByTagName('range_Tmin_to_1000')[0].getElementsByTagName('coef')
+		highTcoeffs=[]
+		for coef in highTcoeffNodes:
+			name=coef.getAttribute('name')
+			value=float(coef.firstChild.data.replace(' ','').replace('D','E'))
+			highTcoeffs.append(value)
+		lowTcoeffs=[]
+		for coef in lowTcoeffNodes:
+			name=coef.getAttribute('name')
+			value=float(coef.firstChild.data.replace(' ','').replace('D','E'))
+			lowTcoeffs.append(value)
+		allCoeffs=numpy.array([lowTcoeffs, highTcoeffs])
+		return allCoeffs
+		
 			
-class PrimeThermo:
+class PrimeSpecies:
+	""" a species from the Prime warehouse """
 	def __init__(self,primeid,mirror="warehouse.primekinetics.org"):
 		self.primeid=primeid
 		self.mirrorLocation=mirror
-	def readThermo(self):
-		path=os.path.join(self.mirrorLocation,'depository','species','data')
+	def thermos(self):
+		""" a generator that returns the thermodymnamic polynomials of the species, one at a time, as PrimeThermo objects """
+		path=os.path.join(self.mirrorLocation,'depository','species','data',self.primeid)
+		if not os.path.exists(path): 
+			# print "%s has no thermo polynomials"%self.primeid
+			raise StopIteration
 		listOfFiles=os.listdir(path)
+		# print "%s has thermos %s"%(self.primeid,listOfFiles)
 		for filename in listOfFiles:
 			filePath=os.path.join(path,filename)
 			if not os.path.isfile(filePath): continue
 			if not re.match('thp\d+\.xml',filename): continue
+			if not int(re.match('thp(\d+).xml',filename).group(1))>0: continue
+			try:
+				dom=xml.dom.minidom.parse(filePath)
+			except xml.parsers.expat.ExpatError, error:
+				print "BAD XML IN FILE %s"%filePath
+				print "Error: ",error
+				continue # try next file
+			yield PrimeThermo(dom)
+			
+class PrimeThermo:
+	""" a themodynamic polynomial set from the Prime warehouse"""
+	def __init__(self,dom):
+		self.dom = dom
+		self.primeID=dom.firstChild.getAttribute('primeID')
+	def __del__(self):
+		self.dom.unlink()
+	def __str__(self):
+		return self.primeID
+	def isFromBurcat(self, BurcatBibliographyID=u'b00014727'):
+		""" returns True if one of the bibliographyLink items matches that of Burcat A., Ruscic B., 2006. (b00014727)
+			otherwise returns False"""
+		for bibItem in self.dom.getElementsByTagName('bibliographyLink'):
+			if bibItem.getAttribute('primeID')==BurcatBibliographyID:
+				return True
+		# we haven't yet returned True and have run out of bibItems...
+		return False
+		
+	def coefficients(self):
+		""" returns numpy.array([lowTcoeffs, highTcoeffs])  of the thermo polynomial coefficients"""
+		polynomials=self.dom.getElementsByTagName('polynomial')
+		assert len(polynomials)==2, "Was expecitng two sets of coefficients"
+		# I'm assuming the low T comes first. 
+		assert (float(polynomials[0].getElementsByTagName('bound')[0].firstChild.data) < 
+		       float(polynomials[1].getElementsByTagName('bound')[0].firstChild.data) ) # check ordering assumption
+		highTcoeffNodes=polynomials[1].getElementsByTagName('coefficient')
+		lowTcoeffNodes=polynomials[0].getElementsByTagName('coefficient')
+		highTcoeffs=[]
+		for coef in highTcoeffNodes:
+			name=coef.getAttribute('label')
+			value=float(coef.firstChild.data)
+			highTcoeffs.append(value)
+		lowTcoeffs=[]
+		for coef in lowTcoeffNodes:
+			name=coef.getAttribute('label')
+			value=float(coef.firstChild.data)
+			lowTcoeffs.append(value)
+		allCoeffs=numpy.array([lowTcoeffs, highTcoeffs])
+		return allCoeffs
+		
 
-class untitledTests(unittest.TestCase):
-	def setUp(self):
-		pass
+#class untitledTests(unittest.TestCase):
+#	def setUp(self):
+#		pass
 
 if __name__ == '__main__':
-#	unittest.main()	
+#	unittest.main()
+	numpy.set_printoptions(precision=1)
+	
+	
+	passList=[]
+	failList=[]
+	errorList=[]
+	notFoundList=[]
+	
 	p=PrimeSpeciesList()
 	
 	b=BurcatThermo()
 
 	for specie in b.species():
+		print 
+		print "Trying Burcat species with CAS %s"%specie.cas
 		try:
 			primeids=p.cas2primeids[specie.cas]
 		except KeyError:
-			print "species with CAS %s not in prime"%specie.cas
-			continue			
-		for phase in specie.phases():
-			print phase.formula().firstChild.wholeText
+			print "Species with CAS %s not found in prime"%specie.cas
+			notFoundList.append(specie.cas)
+			continue
 			
-	 b.dom.unlink() # memory explodes if you don't do this. 
+		for phase in specie.phases():
+			print "Looking for Burcat phase %s"%str(phase)
+			
+			burcatCoeffs = phase.coefficients()
+					
+			for primeid in primeids:
+				print "Trying PrIMe species %s"%primeid
+				primeSpecies=PrimeSpecies(primeid)
+				for primeThermo in primeSpecies.thermos():
+					if not primeThermo.isFromBurcat():
+						print "PrIMe polynomial %s/%s is not from Burcat & Ruscic so skipping comparison"%(primeid,str(primeThermo))
+						continue
+					else:
+						print "PrIMe polynomial %s/%s claims to be from Burcat & Ruscic"%(primeid,str(primeThermo))
+						try:
+							primeCoeffs = primeThermo.coefficients()
+						except AssertionError, error:
+							print "ERROR reading prime coeffs:",error
+							errorList.append("%s/%s"%(primeid,str(primeThermo)))
+							continue
+					
+						differences = burcatCoeffs - primeCoeffs  # perhaps absolute difference is silly - some coefficients are very small, some are large. finding relative difference leads to divide-by-zero NaN though...
+						sumSquareError = numpy.sum(differences*differences )
+						print "sum of squared errors = %g"%sumSquareError
+						
+						if sumSquareError>1E-3: # arbitrary and probably inappropriate
+							print "PrIMe"
+							print primeCoeffs
+							print "Burcat"
+							print burcatCoeffs
+							print "Differences"
+							print differences
+							failList.append("%s/%s"%(primeid,str(primeThermo)))
+						else:
+							print "seemed to match pass OK"
+							passList.append("%s/%s"%(primeid,str(primeThermo)))
+							
+	print "\n\n******************\n"	
+	print "PASSED OK %d POLYNOMIALS"%len(passList)
+	for s in passList:
+		print s
+		
+	print "\n\n******************\n"
+	print "FAILED COMPARISON TEST %d polynomials"%len(failList)
+	for s in failList:
+		print s
+	
+	print "\n\n******************\n"
+	print "ERRORS READING %d PrIMe polynomials"%len(errorList)
+	for s in errorList:
+		print s
+
+	print "\n\n******************\n"
+	print "SPECIES WITH CAS NOT FOUND IN PrIMe %d "%len(notFoundList)
+	for s in notFoundList:
+		print s
+		
+	#b.dom.unlink() # memory explodes if you don't do this. 
 	#comment it out though if you want to play around with things after running the script
