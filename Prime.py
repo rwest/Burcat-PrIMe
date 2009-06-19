@@ -35,10 +35,7 @@ class ThingWithCache:
 		return True
 	def saveCache(self):
 		"""Saves the cache (everything in the list self.cacheItems gets saved)"""
-		try: # try to make the folder
-			os.makedirs(self.cacheLocation)
-		except OSError:
-			pass # folder probably exists already
+		os.path.isdir(self.cacheLocation) or os.makedirs(self.cacheLocation) # check the cache folder exists
 		try:
 			for item in self.cacheItems:
 				self.saveItem(item)
